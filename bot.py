@@ -65,7 +65,7 @@ if __name__ == '__main__':
         if y != currentYT:
             currentYT = y
             logging.info("Found new video!")
-            mastodon.status_post(messageYT + z)
+            mastodon.status_post(messageYT + ' ' + z)
         # Check for new podcasts
         logging.info("Checking for new Podcasts..")
         x = feedparser.parse(POD_URL)
@@ -74,12 +74,12 @@ if __name__ == '__main__':
         if y != currentPD:
             currentPD = y
             logging.info("Found new podcast!")
-            mastodon.status_post(messagePD + z)
+            mastodon.status_post(messagePD + ' ' + z)
         # Start the sleep loop
         logging.info("Checking Loop Complete. Zzzz..")
         for number in range(DELAY):
             time.sleep(1)
             if killer.kill_now:
                 break
-                
+
     logging.info("End of the program. I was killed gracefully :)")
