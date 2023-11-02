@@ -1,0 +1,14 @@
+version: "3.6"
+networks:
+  backend:
+    external: true
+    name: "backend"
+services:
+  dftbabot:
+    container_name: "dftbabot"
+    env_file: .env
+    hostname: "dftbabot"
+    image: "mglennon/dftba-bot:latest"
+    restart: "unless-stopped"
+    networks:
+      - backend
