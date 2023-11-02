@@ -21,8 +21,8 @@ if __name__ == '__main__':
     VERSION = '1.1'
 
     # Echo version
-    logger.info("Mastodon YT & Podcast Notifier Bot Version " + VERSION)
-    logger.info("https://github.com/nomad-geek/tuberbot")
+    logging.info("Mastodon YT & Podcast Notifier Bot Version " + VERSION)
+    logging.info("https://github.com/nomad-geek/tuberbot")
 
     # Env Vars
     SERVER_URL = os.getenv('SERVER_URL')
