@@ -18,6 +18,12 @@ if __name__ == '__main__':
     logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
     killer = GracefulKiller()
 
+    VERSION = '1.1'
+
+    # Echo version
+    logger.info("Mastodon YT & Podcast Notifier Bot Version " + VERSION)
+    logger.info("https://github.com/nomad-geek/tuberbot")
+
     # Env Vars
     SERVER_URL = os.getenv('SERVER_URL')
     ACCESS_TOKEN = os.getenv('ACCESS_TOKEN')
