@@ -6,6 +6,9 @@ ENV USER bot
 ENV GROUP_NAME group
 ENV OWNER user@example.com
 ENV SERVER_URL https://localhost
+ENV BOT_NAME carl
+ENV CLIENT_KEY SECRET_KEY
+ENV CLIENT_SECRET SECRET_KEY
 ENV ACCESS_TOKEN SECRET_KEY
 ENV YT_URL https://www.youtube.com/feeds/videos.xml?channel_id=0000
 ENV POD_URL https://localhost

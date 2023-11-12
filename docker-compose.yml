@@ -4,11 +4,11 @@ networks:
     external: true
     name: "backend"
 services:
-  dftbabot:
-    container_name: "dftbabot"
+  carl:
+    container_name: "carl"
     env_file: .env
-    hostname: "dftbabot"
-    image: "mglennon/dftba-bot:latest"
+    hostname: "carl"
+    image: "mglennon/carl:latest"
     restart: "unless-stopped"
     networks:
       - backend

@@ -26,12 +26,19 @@ if __name__ == '__main__':
 
     # Env Vars
     SERVER_URL = os.getenv('SERVER_URL')
+    BOT_NAME = os.getenv('BOT_NAME')
+    CLIENT_KEY = os.getenv('CLIENT_KEY')
+    CLIENT_SECRET = os.getenv('CLIENT_SECRET')
     ACCESS_TOKEN = os.getenv('ACCESS_TOKEN')
     YT_URL = os.getenv('YT_URL')
     POD_URL = os.getenv('POD_URL')
     DELAY = int(os.getenv('DELAY')) * 60
     GROUP_NAME = os.getenv('GROUP_NAME')
     OWNER = os.getenv('OWNER')
+
+    # Register us with the server
+    Mastodon.create_app(BOT_NAME, api_base_url = SERVER_URL)
+
     # initialize Client
     mastodon = Mastodon(api_base_url = SERVER_URL, access_token = ACCESS_TOKEN)
 
