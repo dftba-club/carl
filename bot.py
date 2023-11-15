@@ -83,7 +83,7 @@ if __name__ == '__main__':
         logging.info("Checking for new Podcasts..")
         x = feedparser.parse(POD_URL)
         y = x.entries[0].id
-        z = x.entries[0].link
+        z = x.entries[0].enclosures[0].href
         if y != currentPD:
             currentPD = y
             logging.info("Found new podcast!")
