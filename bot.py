@@ -67,32 +67,35 @@ if __name__ == '__main__':
 
     logging.info("Starting application loop..")
     while True:
-        # Check if we should quit
-        if killer.kill_now:
-            break
-        # Check for new videos
-        logging.info("Checking for new Videos..")
-        x = feedparser.parse(YT_URL)
-        y = x.entries[0].id
-        z = x.entries[0].link
-        if y != currentYT:
-            currentYT = y
-            logging.info("Found new video!")
-            mastodon.status_post(messageYT + ' ' + z)
-        # Check for new podcasts
-        logging.info("Checking for new Podcasts..")
-        x = feedparser.parse(POD_URL)
-        y = x.entries[0].id
-        z = x.entries[0].enclosures[0].href
-        if y != currentPD:
-            currentPD = y
-            logging.info("Found new podcast!")
-            mastodon.status_post(messagePD + ' ' + z)
-        # Start the sleep loop
-        logging.info("Checking Loop Complete. Zzzz..")
-        for number in range(DELAY):
-            time.sleep(1)
+        try:
+            # Check if we should quit
             if killer.kill_now:
                 break
+            # Check for new videos
+            logging.info("Checking for new Videos..")
+            x = feedparser.parse(YT_URL)
+            y = x.entries[0].id
+            z = x.entries[0].link
+            if y != currentYT:
+                currentYT = y
+                logging.info("Found new video!")
+                mastodon.status_post(messageYT + ' ' + z)
+            # Check for new podcasts
+            logging.info("Checking for new Podcasts..")
+            x = feedparser.parse(POD_URL)
+            y = x.entries[0].id
+            z = x.entries[0].enclosures[0].href
+            if y != currentPD:
+                currentPD = y
+                logging.info("Found new podcast!")
+                mastodon.status_post(messagePD + ' ' + z)
+            # Start the sleep loop
+            logging.info("Checking Loop Complete. Zzzz..")
+            for number in range(DELAY):
+                time.sleep(1)
+                if killer.kill_now:
+                    break
+        except:
+            logging.info("Exception not handled. I'm dying!")
 
-    logging.info("End of the program. I was killed gracefully :)")
+    logging.info("End of the program.")
