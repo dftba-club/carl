@@ -18,11 +18,11 @@ if __name__ == '__main__':
     logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
     killer = GracefulKiller()
 
-    VERSION = '1.2'
+    VERSION = '1.3'
 
     # Echo version
     logging.info("Mastodon YT & Podcast Notifier Bot Version " + VERSION)
-    logging.info("https://github.com/nomad-geek/carl")
+    logging.info("https://github.com/dftba-club/carl")
 
     # Env Vars
     SERVER_URL = os.getenv('SERVER_URL')
