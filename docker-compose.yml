@@ -12,5 +12,3 @@ services:
     restart: "unless-stopped"
     networks:
       - backend
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
