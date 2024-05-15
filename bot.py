@@ -62,7 +62,7 @@ if __name__ == '__main__':
 
     logging.info("Initializing Git Feed..")
     x = feedparser.parse(GIT_URL)
-    currentGIT = c.entries[0].updated
+    currentGIT = x.entries[0].updated
     logging.info("  Current GIT Date is " + currentGIT)
 
     # Messaging
