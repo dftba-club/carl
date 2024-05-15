@@ -32,6 +32,8 @@ if __name__ == '__main__':
     ACCESS_TOKEN = os.getenv('ACCESS_TOKEN')
     YT_URL = os.getenv('YT_URL')
     POD_URL = os.getenv('POD_URL')
+    GIT_URL = os.getenv('GIT_URL')
+    GIT_MSG = os.getenv('GIT_MSG')
     DELAY = int(os.getenv('DELAY')) * 60
     GROUP_NAME = os.getenv('GROUP_NAME')
     OWNER = os.getenv('OWNER')
@@ -45,6 +47,7 @@ if __name__ == '__main__':
     # init ID vars
     currentYT = ''
     currentPD = ''
+    currentGIT = ''
 
     # Get initial IDs so we know when there's a new one
     logging.info("Initializing YouTube Feed..")
@@ -56,6 +59,11 @@ if __name__ == '__main__':
     x = feedparser.parse(POD_URL)
     currentPD = x.entries[0].id
     logging.info("  Current Pod ID is " + currentPD)
+
+    logging.info("Initializing Git Feed..")
+    x = feedparser.parse(GIT_URL)
+    currentGIT = c.entries[0].updated
+    logging.info("  Current GIT Date is " + currentGIT)
 
     # Messaging
     messageYT = "A new " + GROUP_NAME + " video has been posted!"
@@ -89,6 +97,14 @@ if __name__ == '__main__':
                 currentPD = y
                 logging.info("Found new podcast!")
                 mastodon.status_post(messagePD + ' ' + z)
+            # Check for new git releases
+            logging.info("Checking for new git releases..")
+            x = feedparser.parse(GIT_URL)
+            y = x.entries[0].updated
+            if y != currentGIT:
+                currentGIT = y
+                logging.info("Found new Git Release")
+                mastodon.status_post(GIT_MSG)
             # Start the sleep loop
             logging.info("Checking Loop Complete. Zzzz..")
             for number in range(DELAY):
