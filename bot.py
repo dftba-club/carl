@@ -116,7 +116,12 @@ if __name__ == '__main__':
                 mastodon.status_post(GIT_MSG + icon)
             # Start the sleep loop
             logging.info("Checking Loop Complete. Zzzz..")
-            for number in range(DELAY):
+            nextRefresh = time.time() + DELAY
+            while nextRefresh < time.time():
+                # Get notifications
+                notifs = mastodon.notifications(id=None, account_id=None, max_id=None, min_id=None, since_id=None, limit=None, exclude_types=None, types='mention', mentions_only=None)
+                logging.debug(notifs)
+                #mastodon.notifications_clear()
                 time.sleep(1)
                 if killer.kill_now:
                     break
