@@ -2,6 +2,7 @@ import signal
 import time
 import logging, sys
 import os
+import threading
 from mastodon import Mastodon, StreamListener
 import feedparser
 
