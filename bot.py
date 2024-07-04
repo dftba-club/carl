@@ -36,7 +36,7 @@ if __name__ == '__main__':
     logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
     killer = GracefulKiller()
 
-    VERSION = '1.3'
+    VERSION = '1.4'
 
     # Echo version
     logging.info("Mastodon YT & Podcast Notifier Bot Version " + VERSION)
