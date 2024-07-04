@@ -4,7 +4,6 @@ import logging, sys
 import os
 from mastodon import Mastodon
 import feedparser
-from bs4 import BeautifulSoup
 
 
 class Listener(mastodon.StreamListener):
