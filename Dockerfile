@@ -13,7 +13,9 @@ ENV ACCESS_TOKEN SECRET_KEY
 ENV YT_URL https://www.youtube.com/feeds/videos.xml?channel_id=0000
 ENV POD_URL https://localhost
 ENV GIT_URL https://github.com/dftba-club/carl/releases.atom
-ENV GIT_MSG='A new version of me has been released! Please update me!'
+ENV GIT_MSG 'A new version of me has been released! Please update me!'
+ENV LOCAL_ONLY false
+ENV LOCAL_ICON '👁'
 ENV DELAY 10
 
 ENV PYTHONDONTWRITEBYTECODE 1

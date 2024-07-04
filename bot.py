@@ -37,6 +37,8 @@ if __name__ == '__main__':
     DELAY = int(os.getenv('DELAY')) * 60
     GROUP_NAME = os.getenv('GROUP_NAME')
     OWNER = os.getenv('OWNER')
+    LOCAL_ONLY = os.getenv('LOCAL_ONLY')
+    LOCAL_ICON = os.getenv('LOCAL_ICON')
 
     # Register us with the server
     Mastodon.create_app(BOT_NAME, api_base_url = SERVER_URL)
@@ -48,6 +50,13 @@ if __name__ == '__main__':
     currentYT = ''
     currentPD = ''
     currentGIT = ''
+
+    # fill local icon if needed
+    icon = ''
+    local_statement = ''
+    if LOCAL_ONLY == true:
+        icon = ' ' + LOCAL_ICON
+        local_statement = ' I will be posting locally.'
 
     # Get initial IDs so we know when there's a new one
     logging.info("Initializing YouTube Feed..")
@@ -71,7 +80,7 @@ if __name__ == '__main__':
 
     # Check in with owner
     logging.info("Checking in with owner..")
-    mastodon.status_post("I'm online @" + OWNER, visibility='direct')
+    mastodon.status_post("I'm online @" + OWNER + local_statement, visibility='direct')
 
     logging.info("Starting application loop..")
     while True:
@@ -87,7 +96,7 @@ if __name__ == '__main__':
             if y != currentYT:
                 currentYT = y
                 logging.info("Found new video!")
-                mastodon.status_post(messageYT + ' ' + z)
+                mastodon.status_post(messageYT + ' ' + z + icon)
             # Check for new podcasts
             logging.info("Checking for new Podcasts..")
             x = feedparser.parse(POD_URL)
@@ -96,7 +105,7 @@ if __name__ == '__main__':
             if y != currentPD:
                 currentPD = y
                 logging.info("Found new podcast!")
-                mastodon.status_post(messagePD + ' ' + z)
+                mastodon.status_post(messagePD + ' ' + z + icon)
             # Check for new git releases
             logging.info("Checking for new git releases..")
             x = feedparser.parse(GIT_URL)
@@ -104,7 +113,7 @@ if __name__ == '__main__':
             if y != currentGIT:
                 currentGIT = y
                 logging.info("Found new Git Release")
-                mastodon.status_post(GIT_MSG)
+                mastodon.status_post(GIT_MSG + icon)
             # Start the sleep loop
             logging.info("Checking Loop Complete. Zzzz..")
             for number in range(DELAY):
