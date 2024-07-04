@@ -117,12 +117,12 @@ if __name__ == '__main__':
             # Start the sleep loop
             logging.info("Checking Loop Complete. Zzzz..")
             nextRefresh = time.time() + DELAY
-            while nextRefresh < time.time():
+            while nextRefresh > time.time():
                 # Get notifications
                 notifs = mastodon.notifications(id=None, account_id=None, max_id=None, min_id=None, since_id=None, limit=None, exclude_types=None, types='mention', mentions_only=None)
                 logging.debug(notifs)
                 #mastodon.notifications_clear()
-                time.sleep(1)
+                time.sleep(30)
                 if killer.kill_now:
                     break
         except:
