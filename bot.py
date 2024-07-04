@@ -37,7 +37,7 @@ if __name__ == '__main__':
     DELAY = int(os.getenv('DELAY')) * 60
     GROUP_NAME = os.getenv('GROUP_NAME')
     OWNER = os.getenv('OWNER')
-    LOCAL_ONLY = os.getenv('LOCAL_ONLY')
+    LOCAL_ONLY = os.getenv("LOCAL_ONLY", 'False').lower() in ('true', '1', 't', 'True')
     LOCAL_ICON = os.getenv('LOCAL_ICON')
 
     # Register us with the server
@@ -54,7 +54,7 @@ if __name__ == '__main__':
     # fill local icon if needed
     icon = ''
     local_statement = ''
-    if LOCAL_ONLY == true:
+    if LOCAL_ONLY:
         icon = ' ' + LOCAL_ICON
         local_statement = ' I will be posting locally.'
 
