@@ -8,7 +8,7 @@ services:
     container_name: "carl"
     env_file: .env
     hostname: "carl"
-    image: "mglennon/carl:latest"
+    image: "mglennon/carl:dev"
     restart: "unless-stopped"
     networks:
       - backend
