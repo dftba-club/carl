@@ -29,6 +29,9 @@ class GracefulKiller:
     def exit_gracefully(self,signum, frame):
         self.kill_now = True
 
+def startListener(m):
+    m.stream_user(Listener)
+
 if __name__ == '__main__':
     logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
     killer = GracefulKiller()
@@ -98,7 +101,7 @@ if __name__ == '__main__':
     mastodon.status_post("I'm online @" + OWNER + local_statement, visibility='direct')
 
     logging.info("Starting listener..")
-    thread = Thread(target=mastodon.stream_user, args=(Listener,))
+    thread = Thread(target=startListener, args=(mastodon,))
     thread.start()
     logging.info("Starting application loop..")
     while True:
