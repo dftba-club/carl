@@ -98,7 +98,7 @@ if __name__ == '__main__':
     mastodon.status_post("I'm online @" + OWNER + local_statement, visibility='direct')
 
     logging.info("Starting listener..")
-    thread = Thread(target=mastodon.stream_user, args=(Listener()))
+    thread = Thread(target=mastodon.stream_user, args=(Listener,))
     thread.start()
     logging.info("Starting application loop..")
     while True:
