@@ -4,6 +4,21 @@ import logging, sys
 import os
 from mastodon import Mastodon
 import feedparser
+from bs4 import BeautifulSoup
+
+
+class Listener(mastodon.StreamListener):
+
+    def on_update(self, status):
+        logger.debug("on_update: {status}")
+        # on_update: {'id': 109371390226010302, 'content': '<p>Listening to Toots...</p>',
+        #  'account': {'id': 109359234895957150, 'username': 'admin'}, ...}
+
+    def on_notification(self, notification):
+        logger.debug("on_notification: {notification}")
+        # Follow notification:
+        # on_notification: {'id': 7, 'type': 'follow',
+        #  'account': {'id': 109370544417433130, 'username': 'some_friend'}, ...}
 
 class GracefulKiller:
     kill_now = False
@@ -82,6 +97,9 @@ if __name__ == '__main__':
     logging.info("Checking in with owner..")
     mastodon.status_post("I'm online @" + OWNER + local_statement, visibility='direct')
 
+    logging.info("Starting listener..")
+    thread = Thread(target=mastodon.stream_user, args=(Listener()))
+    thread.start()
     logging.info("Starting application loop..")
     while True:
         try:
@@ -118,11 +136,7 @@ if __name__ == '__main__':
             logging.info("Checking Loop Complete. Zzzz..")
             nextRefresh = time.time() + DELAY
             while nextRefresh > time.time():
-                # Get notifications
-                notifs = mastodon.notifications(id=None, account_id=None, max_id=None, min_id=None, since_id=None, limit=None, exclude_types=None, types='mention', mentions_only=None)
-                logging.debug(notifs)
-                #mastodon.notifications_clear()
-                time.sleep(30)
+                time.sleep(1)
                 if killer.kill_now:
                     break
         except:
