@@ -6,7 +6,7 @@ from mastodon import Mastodon
 import feedparser
 
 
-class Listener(mastodon.StreamListener):
+class Listener(Mastodon.StreamListener):
 
     def on_update(self, status):
         logger.debug("on_update: {status}")
@@ -70,7 +70,7 @@ if __name__ == '__main__':
     local_statement = ''
     if LOCAL_ONLY:
         icon = ' ' + LOCAL_ICON
-        local_statement = ' I will be posting locally.'
+        local_statement = '. I will be posting locally.'
 
     # Get initial IDs so we know when there's a new one
     logging.info("Initializing YouTube Feed..")
