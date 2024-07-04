@@ -2,11 +2,11 @@ import signal
 import time
 import logging, sys
 import os
-from mastodon import Mastodon
+from mastodon import Mastodon, StreamListener
 import feedparser
 
 
-class Listener(mastodon.StreamListener):
+class Listener(StreamListener):
 
     def on_update(self, status):
         logger.debug("on_update: {status}")
