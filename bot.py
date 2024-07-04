@@ -6,7 +6,7 @@ from mastodon import Mastodon
 import feedparser
 
 
-class Listener(Mastodon.StreamListener):
+class Listener(mastodon.StreamListener):
 
     def on_update(self, status):
         logger.debug("on_update: {status}")
