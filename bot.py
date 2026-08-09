@@ -4,8 +4,8 @@ import time
 import logging
 import sys
 import os
-import shlex
 import re
+from html.parser import HTMLParser
 from urllib.parse import urlparse
 from mastodon import Mastodon
 import feedparser
@@ -21,10 +21,6 @@ class GracefulKiller:
     def exit_gracefully(self, signum, frame):
         self.kill_now = True
 
-import shlex
-import re
-import logging
-
 def safe_log_text(text, limit=200):
     """Truncate and strip control characters before writing user-supplied text to logs."""
     text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text or '')
@@ -33,58 +29,110 @@ def safe_log_text(text, limit=200):
     return text
 
 
+class _TextExtractor(HTMLParser):
+    """Extracts human-visible text from a Mastodon status body, decoding entities and
+    preserving line breaks. Unlike a tag-stripping regex, this can't be confused by a
+    literal '>' inside an attribute value (e.g. a URL query string) -- Mastodon's own
+    sanitizer allows that, so a regex ending a "tag" at the first '>' can leave live
+    command text behind that a human reader never sees."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out = []
+
+    def handle_data(self, data):
+        self.out.append(data)
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'br':
+            self.out.append('\n')
+
+    def handle_endtag(self, tag):
+        if tag in ('p', 'div'):
+            self.out.append('\n\n')
+
+
+def html_to_text(content):
+    """Mastodon status HTML -> plain text, with entities decoded and paragraph/line
+    structure preserved."""
+    parser = _TextExtractor()
+    parser.feed(content or '')
+    parser.close()
+    return ''.join(parser.out).strip()
+
+
 def parse_command(message, bot_name):
     if not message.strip():
-        return None, None  # Handle empty message case
+        return None, None, None  # Handle empty message case
 
-    # Remove HTML tags using a regular expression
-    message = re.sub(r'<[^>]+>', '', message)  # Strip HTML tags
-    logging.debug("MSG: " + safe_log_text(message))
-    # Use shlex to handle quoted strings. User-generated Mastodon posts aren't
-    # guaranteed to have balanced quotes (e.g. a stray apostrophe like "wasn't"),
-    # which makes shlex.split raise ValueError -- treat that as "not a command"
-    # instead of letting it crash the whole notification loop.
-    try:
-        parts = shlex.split(message)
-    except ValueError as e:
-        logging.debug(f"Could not parse message as a command ({e}): {message}")
-        return None, None
+    text = html_to_text(message)
+    logging.debug("MSG: " + safe_log_text(text))
+    if not text:
+        return None, None, None  # Nothing left after stripping tags/whitespace
 
-    if not parts:
-        return None, None  # Nothing left after stripping tags/whitespace
+    # Split off the leading "@bot_name" and command; everything after is the
+    # parameter tail, kept as its own group so we can hand callers both a
+    # whitespace-collapsed form (for parsing) and the raw form (for `say`).
+    match = re.match(r'\s*(\S+)(?:\s+(\S+)\s*(.*))?', text, re.DOTALL)
+    if not match:
+        return None, None, None
+    name_token, command_token, tail = match.groups()
 
     # Check if the first part is the bot's name
-    if parts[0].lower() != '@' + bot_name.lower():
-        logging.info(f"Message does not start with my name: {bot_name} / {safe_log_text(parts[0])}")
-        return None, None  # Do nothing if the first var is not the bot's name
+    if name_token.lower() != '@' + bot_name.lower():
+        logging.info(f"Message does not start with my name: {bot_name} / {safe_log_text(name_token)}")
+        return None, None, None  # Do nothing if the first var is not the bot's name
 
-    # Extract command and parameters
-    command = parts[1].lower() if len(parts) > 1 else None
-    parameters = ' '.join(parts[2:]).strip() if len(parts) > 2 else ''
-    return command, parameters
+    if command_token is None:
+        return None, None, None
 
-def canonical_acct(identity, server_url):
+    command = command_token.lower()
+    raw_parameters = (tail or '').strip()
+    # Strip one pair of surrounding matching quotes and collapse internal whitespace,
+    # mirroring the old shlex-based behavior (e.g. `searchvideo "hank green"`) without
+    # shlex's habit of raising on the unbalanced quotes ordinary prose is full of
+    # (a stray apostrophe like "wasn't", or now-decoded entities like &#39;).
+    quoted = re.match(r'^([\'"])(.*)\1$', raw_parameters, re.DOTALL)
+    unquoted = quoted.group(2) if quoted else raw_parameters
+    parameters = ' '.join(unquoted.split())
+    return command, parameters, raw_parameters
+
+def canonical_acct(identity, local_domain):
     """Normalize a configured 'user@domain' identity to Mastodon's `acct` form.
 
     Mastodon reports `acct` as a bare username for local accounts and 'user@domain'
     for remote ones. Matching on the bare username alone would let a remote user with
     the same name impersonate the owner, so resolve the configured identity to
     whichever form Mastodon will actually report.
+
+    `local_domain` should be the instance's own domain as Mastodon itself reports it
+    (see resolve_local_domain) -- not derived from SERVER_URL, which on instances that
+    split WEB_DOMAIN from LOCAL_DOMAIN would silently and permanently fail to match,
+    demoting the owner to LOCAL with no diagnostics.
     """
     identity = identity.strip().strip('\'"').lstrip('@').lower()
     if '@' not in identity:
         return identity
     user, _, domain = identity.partition('@')
-    local_domain = (urlparse(server_url).hostname or '').lower()
-    return user if domain == local_domain else identity
+    return user if domain == (local_domain or '').lower() else identity
 
 
-def role_for(account, owner, staff, server_url):
+def resolve_local_domain(instance_info, server_url):
+    """The instance's own domain, as Mastodon itself reports it, for use in
+    canonical_acct/role_for. Prefers the v2 `domain` field, falls back to the v1
+    `uri` field, and only falls back to parsing SERVER_URL (unreliable when
+    WEB_DOMAIN differs from LOCAL_DOMAIN) if the API didn't say."""
+    domain = (instance_info or {}).get('domain') or (instance_info or {}).get('uri')
+    if domain:
+        return domain.lower()
+    return (urlparse(server_url).hostname or '').lower()
+
+
+def role_for(account, owner, staff, local_domain):
     """Classify a notification's account as OWNER, STAFF, LOCAL, or PUBLIC (remote)."""
     acct = (account.get('acct') or '').lower()
-    if acct and acct == canonical_acct(owner, server_url):
+    if acct and acct == canonical_acct(owner, local_domain):
         return 'OWNER'
-    if acct and any(acct == canonical_acct(s, server_url) for s in staff):
+    if acct and any(acct == canonical_acct(s, local_domain) for s in staff):
         return 'STAFF'
     if acct and '@' not in acct:
         return 'LOCAL'
@@ -151,10 +199,10 @@ def rate_limited(acct):
     return False
 
 
-def handle_command(mastodon, command, parameters, account, status):
+def handle_command(mastodon, command, parameters, raw_parameters, account, status):
     """Handle commands received from users."""
     acct = (account.get('acct') or '').lower()
-    user_role = role_for(account, OWNER, STAFF, SERVER_URL)
+    user_role = role_for(account, OWNER, STAFF, LOCAL_DOMAIN)
 
     if command in NETWORK_COMMANDS and user_role == 'LOCAL' and rate_limited(acct):
         reply_safely(mastodon, status, "You're doing that too fast — try again in a minute.",
@@ -167,10 +215,18 @@ def handle_command(mastodon, command, parameters, account, status):
         if user_role in allowed_roles:
             # Execute the command
             if command == "say":
-                # Post the message with privacy setting of Followers
-                mastodon.status_post(parameters, visibility='public',
-                                      idempotency_key=f"say-{status['id']}")
-                logging.info(f"Posted message from {acct}: {parameters}")
+                if len(raw_parameters) > MAX_CHARS:
+                    reply_safely(mastodon, status,
+                                 f"That's too long to post ({len(raw_parameters)}/{MAX_CHARS} chars).",
+                                 f"say-toolong-{status['id']}")
+                    logging.info(f"Rejected oversized say from {acct} ({len(raw_parameters)} chars)")
+                elif not raw_parameters:
+                    reply_safely(mastodon, status, f"Usage: @{BOT_NAME} say <message>",
+                                 f"say-usage-{status['id']}")
+                else:
+                    mastodon.status_post(raw_parameters, visibility='public',
+                                          idempotency_key=f"say-{status['id']}")
+                    logging.info(f"Posted message from {acct}: {safe_log_text(raw_parameters)}")
             elif command == "ping":
                 reply_safely(mastodon, status, f"pong - {VERSION}", f"pong-{status['id']}")
                 logging.info(f"Replied pong ({VERSION}) to {acct}")
@@ -217,9 +273,9 @@ def handle_command(mastodon, command, parameters, account, status):
                 reply_safely(mastodon, status, text, f"{command}-{status['id']}")
                 logging.info(f"Replied {command} ({result_count} results) to {acct}")
         else:
-            logging.info(f"User {acct} is not allowed to use the command '{command}'.")
+            logging.info(f"User {acct} is not allowed to use the command '{safe_log_text(command)}'.")
     else:
-        logging.info(f"Command '{command}' is not recognized.")
+        logging.info(f"Command '{safe_log_text(command)}' is not recognized.")
 
 # Define command permissions
 command_permissions = {
@@ -288,6 +344,46 @@ def build_search_reply(header, results, total_matches, max_chars, url_chars):
         text += f"\n\n(+{remaining} more — refine your search)"
     return text
 
+def interruptible_sleep(seconds, killer, step=1):
+    """time.sleep(seconds) that wakes every `step` seconds to check killer.kill_now, so a
+    SIGTERM lands within Docker's ~10s stop grace period instead of waiting out the rest
+    of a `seconds`-long sleep (previously up to DELAY, i.e. always a SIGKILL in practice)."""
+    end = time.time() + seconds
+    while not killer.kill_now:
+        remaining = end - time.time()
+        if remaining <= 0:
+            return
+        time.sleep(min(step, remaining))
+
+
+def fetch_first_entry_with_retry(url, killer, label, max_backoff=300):
+    """feedparser.parse(url).entries[0], retried with exponential backoff (capped at
+    max_backoff seconds) until it succeeds or shutdown is requested. Startup used to call
+    this unguarded -- a feed briefly unreachable or returning zero entries raised
+    IndexError straight out of __main__, and under `restart: unless-stopped` that was a
+    tight crashloop. Returns None if killer.kill_now becomes true while waiting."""
+    delay = 5
+    while not killer.kill_now:
+        try:
+            return feedparser.parse(url).entries[0]
+        except Exception as e:
+            logging.info(f"Could not initialize {label} feed ({e}); retrying in {delay}s")
+            interruptible_sleep(delay, killer)
+            delay = min(delay * 2, max_backoff)
+    return None
+
+
+def touch_heartbeat(path):
+    """Write the current time to `path` so an external HEALTHCHECK can tell the main loop
+    is still alive (vs. hung -- socket.setdefaulttimeout bounds individual calls but not
+    a wedged process)."""
+    try:
+        with open(path, 'w') as f:
+            f.write(str(time.time()))
+    except OSError as e:
+        logging.info(f"Could not write heartbeat file {path}: {e}")
+
+
 if __name__ == '__main__':
     logging.basicConfig(stream=sys.stdout, level=os.getenv('LOG_LEVEL', 'INFO'))
     # Documented workaround for feedparser (which exposes no per-call timeout) --
@@ -299,46 +395,83 @@ if __name__ == '__main__':
     logging.info("Mastodon YT & Podcast Notifier Bot Version " + VERSION)
     logging.info("https://github.com/dftba-club/carl")
 
-    # Env Vars
-    SERVER_URL = os.getenv('SERVER_URL')
+    # Env Vars -- validated up front so a misconfiguration produces one clear log line
+    # and a clean exit instead of an uncaught TypeError/AttributeError deep in the loop
+    # (e.g. `int(os.getenv('DELAY')) * 60` when DELAY is unset).
+    REQUIRED_ENV = ['SERVER_URL', 'ACCESS_TOKEN', 'YT_URL', 'POD_URL', 'GROUP_NAME', 'OWNER', 'DELAY']
+    missing = [name for name in REQUIRED_ENV if not os.getenv(name)]
     BOT_NAME = os.getenv('BOT_NAME') or os.getenv('BOT_USER')
+    if not BOT_NAME:
+        missing.append('BOT_NAME or BOT_USER')
+    if missing:
+        logging.error(f"Missing required environment variable(s): {', '.join(missing)}")
+        sys.exit(1)
+
+    SERVER_URL = os.getenv('SERVER_URL')
     ACCESS_TOKEN = os.getenv('ACCESS_TOKEN')
     YT_URL = os.getenv('YT_URL')
     POD_URL = os.getenv('POD_URL')
-    DELAY = int(os.getenv('DELAY')) * 60
     GROUP_NAME = os.getenv('GROUP_NAME')
     OWNER = os.getenv('OWNER')
     STAFFC = os.getenv('STAFF')
     STAFF = STAFFC.split(',') if STAFFC else []
+    HEARTBEAT_FILE = os.getenv('HEARTBEAT_FILE', '/tmp/carl-heartbeat')
+
+    try:
+        DELAY = int(os.getenv('DELAY')) * 60
+    except ValueError:
+        logging.error(f"DELAY must be an integer number of minutes, got: {os.getenv('DELAY')!r}")
+        sys.exit(1)
 
     # Initialize Client
     mastodon = Mastodon(api_base_url=SERVER_URL, access_token=ACCESS_TOKEN)
 
-    # Look up this instance's real status-length limits once at startup, so search
-    # replies can fit as many results as actually allowed instead of assuming Mastodon's
-    # 500-char default.
+    # Look up this instance's own info once at startup: real status-length limits (so
+    # search replies can fit as many results as actually allowed instead of assuming
+    # Mastodon's 500-char default) and the instance's own domain (so canonical_acct
+    # doesn't have to guess it from SERVER_URL, which is wrong whenever an instance's
+    # WEB_DOMAIN differs from its LOCAL_DOMAIN).
     try:
-        statuses_config = mastodon.instance()['configuration']['statuses']
+        instance_info = mastodon.instance()
+    except Exception as e:
+        logging.info(f"Could not read instance info ({e}); using defaults / SERVER_URL")
+        instance_info = {}
+
+    try:
+        statuses_config = instance_info['configuration']['statuses']
         MAX_CHARS = statuses_config['max_characters']
         URL_CHARS = statuses_config['characters_reserved_per_url']
-    except Exception as e:
+    except (KeyError, TypeError) as e:
         logging.info(f"Could not read instance status-length config ({e}), using Mastodon defaults")
         MAX_CHARS, URL_CHARS = 500, 23
     logging.info(f"Instance status limits: {MAX_CHARS} chars, URLs counted as {URL_CHARS}")
+
+    LOCAL_DOMAIN = resolve_local_domain(instance_info, SERVER_URL)
+    logging.info(f"Local domain resolved as: {LOCAL_DOMAIN}")
+    logging.info(f"Owner canonicalizes to: {canonical_acct(OWNER, LOCAL_DOMAIN)}")
+    if STAFF:
+        logging.info(f"Staff canonicalize to: {[canonical_acct(s, LOCAL_DOMAIN) for s in STAFF]}")
 
     # Init ID vars
     currentYT = ''
     currentPD = ''
 
-    # Get initial IDs so we know when there's a new one
+    # Get initial IDs so we know when there's a new one. Retried with backoff (see
+    # fetch_first_entry_with_retry) rather than crashing outright.
     logging.info("Initializing YouTube Feed..")
-    x = feedparser.parse(YT_URL)
-    currentYT = x.entries[0].id
+    entry = fetch_first_entry_with_retry(YT_URL, killer, "YouTube")
+    if killer.kill_now:
+        logging.info("Shutdown requested during startup; exiting.")
+        sys.exit(0)
+    currentYT = entry.id
     logging.info("  Current Video ID is " + currentYT)
 
     logging.info("Initializing Podcast Feed..")
-    x = feedparser.parse(POD_URL)
-    currentPD = x.entries[0].id
+    entry = fetch_first_entry_with_retry(POD_URL, killer, "Podcast")
+    if killer.kill_now:
+        logging.info("Shutdown requested during startup; exiting.")
+        sys.exit(0)
+    currentPD = entry.id
     logging.info("  Current Pod ID is " + currentPD)
 
     # Messaging
@@ -351,8 +484,9 @@ if __name__ == '__main__':
     last_execution_time = 0
     last_notification_id = None
     logging.info("Starting application loop..")
-    while True:
+    while not killer.kill_now:
         current_time = time.time()
+        touch_heartbeat(HEARTBEAT_FILE)
         try:
             # CHECK FOR NOTIFICATIONS ON LOOP
             logging.debug("Checking for new DMs..")
@@ -361,9 +495,9 @@ if __name__ == '__main__':
                 try:
                     if notification['type'] == 'mention':
                         message = notification['status']['content']
-                        command, parameters = parse_command(message, BOT_NAME)
+                        command, parameters, raw_parameters = parse_command(message, BOT_NAME)
                         if command != None:
-                            handle_command(mastodon, command, parameters,
+                            handle_command(mastodon, command, parameters, raw_parameters,
                                            notification['account'],
                                            notification['status'])
                     else:
@@ -389,7 +523,7 @@ if __name__ == '__main__':
                 # Check if we should quit
                 if killer.kill_now:
                     break
-                
+
                 # Check for new videos
                 logging.info("Checking for new Videos..")
                 x = feedparser.parse(YT_URL)
@@ -413,9 +547,9 @@ if __name__ == '__main__':
                     currentPD = y
                 last_execution_time = current_time
                 logging.info("Update loop complete.")
-            time.sleep(20)
+            interruptible_sleep(20, killer)
         except Exception as e:
             logging.info(f"Exception not handled: {e}. I'm dying!")
-            time.sleep(10)
+            interruptible_sleep(10, killer)
 
     logging.info("End of the program.")
