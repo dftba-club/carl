@@ -28,8 +28,18 @@ def parse_command(message, bot_name):
     # Remove HTML tags using a regular expression
     message = re.sub(r'<[^>]+>', '', message)  # Strip HTML tags
     logging.debug("MSG: " + message)
-    # Use shlex to handle quoted strings
-    parts = shlex.split(message)
+    # Use shlex to handle quoted strings. User-generated Mastodon posts aren't
+    # guaranteed to have balanced quotes (e.g. a stray apostrophe like "wasn't"),
+    # which makes shlex.split raise ValueError -- treat that as "not a command"
+    # instead of letting it crash the whole notification loop.
+    try:
+        parts = shlex.split(message)
+    except ValueError as e:
+        logging.debug(f"Could not parse message as a command ({e}): {message}")
+        return None, None
+
+    if not parts:
+        return None, None  # Nothing left after stripping tags/whitespace
 
     # Check if the first part is the bot's name
     if parts[0].lower() != '@' + bot_name.lower():
@@ -141,14 +151,20 @@ if __name__ == '__main__':
             logging.debug("Checking for new DMs..")
             notifications = mastodon.notifications()
             for notification in notifications:
-                if notification['type'] == 'mention':
-                    username = notification['account']['username']
-                    message = notification['status']['content']
-                    command, parameters = parse_command(message, BOT_NAME)
-                    if command != None:
-                        handle_command(mastodon, STAFF, command, parameters, username)
-                else:
-                    logging.debug("Ignoring notif type: " + notification['type'])
+                try:
+                    if notification['type'] == 'mention':
+                        username = notification['account']['username']
+                        message = notification['status']['content']
+                        command, parameters = parse_command(message, BOT_NAME)
+                        if command != None:
+                            handle_command(mastodon, STAFF, command, parameters, username)
+                    else:
+                        logging.debug("Ignoring notif type: " + notification['type'])
+                except Exception as e:
+                    # Never let one bad notification block notifications_clear() below --
+                    # that used to strand the whole batch and get it re-processed (and
+                    # re-crashed on) forever, blocking feed posting along with it.
+                    logging.info(f"Error handling notification {notification.get('id')}: {e}")
             mastodon.notifications_clear()
 
 
@@ -183,7 +199,7 @@ if __name__ == '__main__':
                 logging.info("Update loop complete.")
             time.sleep(20)
         except Exception as e:
-            logging.info("Exception not handled: {e}. I'm dying!")
+            logging.info(f"Exception not handled: {e}. I'm dying!")
             time.sleep(10)
 
     logging.info("End of the program.")
