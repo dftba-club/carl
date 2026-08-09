@@ -5,6 +5,20 @@ It uses env variables so it can certainly be deployed on any other instance but 
 for relevant podcast and YouTube channel updates for the community.
 
 
+# Container image
+
+Images are built and published to [GitHub Container Registry](https://ghcr.io) by
+[`.github/workflows/publish.yml`](.github/workflows/publish.yml) on every push to `main`, for
+both `linux/amd64` and `linux/arm64`:
+
+```
+docker pull ghcr.io/dftba-club/carl:latest
+```
+
+Each build also publishes an immutable `sha-<short-commit>` tag if you want to pin a specific
+version instead of `latest`.
+
+
 # License
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
