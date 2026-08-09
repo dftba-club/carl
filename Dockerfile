@@ -1,6 +1,11 @@
 # set alpine as the base image of the Dockerfile
 FROM python:3.9-slim
 WORKDIR /app
+
+# Release version, injected by the publish workflow's build-arg; 'dev' for local builds.
+ARG VERSION=dev
+ENV VERSION=$VERSION
+
 # Env var which will be the lower-level user
 ENV USER bot
 ENV GROUP_NAME group

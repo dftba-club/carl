@@ -5,8 +5,11 @@ import sys
 import os
 import shlex
 import re
+from urllib.parse import urlparse
 from mastodon import Mastodon
 import feedparser
+
+VERSION = os.getenv('VERSION', 'dev')
 
 class GracefulKiller:
     kill_now = False
@@ -51,16 +54,36 @@ def parse_command(message, bot_name):
     parameters = ' '.join(parts[2:]).strip() if len(parts) > 2 else ''
     return command, parameters
 
-def handle_command(mastodon, staff, command, parameters, username):
+def canonical_acct(identity, server_url):
+    """Normalize a configured 'user@domain' identity to Mastodon's `acct` form.
+
+    Mastodon reports `acct` as a bare username for local accounts and 'user@domain'
+    for remote ones. Matching on the bare username alone would let a remote user with
+    the same name impersonate the owner, so resolve the configured identity to
+    whichever form Mastodon will actually report.
+    """
+    identity = identity.strip().strip('\'"').lstrip('@').lower()
+    if '@' not in identity:
+        return identity
+    user, _, domain = identity.partition('@')
+    local_domain = (urlparse(server_url).hostname or '').lower()
+    return user if domain == local_domain else identity
+
+
+def role_for(account, owner, staff, server_url):
+    """Classify a notification's account as OWNER, STAFF, or PUBLIC."""
+    acct = (account.get('acct') or '').lower()
+    if acct and acct == canonical_acct(owner, server_url):
+        return 'OWNER'
+    if acct and any(acct == canonical_acct(s, server_url) for s in staff):
+        return 'STAFF'
+    return 'PUBLIC'
+
+
+def handle_command(mastodon, command, parameters, account, status):
     """Handle commands received from users."""
-    if username == OWNER:
-        user_role = 'OWNER'
-    elif username in STAFF:
-        user_role = 'STAFF'
-    #elif member:
-        #user_role = 'MEMBER'
-    else:
-        user_role = 'PUBLIC'
+    acct = (account.get('acct') or '').lower()
+    user_role = role_for(account, OWNER, STAFF, SERVER_URL)
 
     if command in command_permissions:
         allowed_roles = command_permissions[command]
@@ -69,15 +92,28 @@ def handle_command(mastodon, staff, command, parameters, username):
             if command == "say":
                 # Post the message with privacy setting of Followers
                 mastodon.status_post(parameters, visibility='public')
-                logging.info(f"Posted message from {username}: {parameters}")
+                logging.info(f"Posted message from {acct}: {parameters}")
+            elif command == "ping":
+                # Don't downgrade a DM's privacy by answering it unlisted.
+                reply_visibility = ('direct' if status.get('visibility') == 'direct'
+                                    else 'unlisted')
+                mastodon.status_reply(
+                    status,
+                    f"pong - {VERSION}",
+                    untag=True,
+                    visibility=reply_visibility,
+                    idempotency_key=f"pong-{status['id']}",
+                )
+                logging.info(f"Replied pong ({VERSION}) to {acct}")
         else:
-            logging.info(f"User {username} is not allowed to use the command '{command}'.")
+            logging.info(f"User {acct} is not allowed to use the command '{command}'.")
     else:
         logging.info(f"Command '{command}' is not recognized.")
 
 # Define command permissions
 command_permissions = {
     "say": ["OWNER"],
+    "ping": ["OWNER"],
 }
 
 def build_post(header, title, url):
@@ -92,15 +128,13 @@ if __name__ == '__main__':
     logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
     killer = GracefulKiller()
 
-    VERSION = '2.2'
-
     # Echo version
     logging.info("Mastodon YT & Podcast Notifier Bot Version " + VERSION)
     logging.info("https://github.com/dftba-club/carl")
 
     # Env Vars
     SERVER_URL = os.getenv('SERVER_URL')
-    BOT_NAME = os.getenv('BOT_NAME')
+    BOT_NAME = os.getenv('BOT_NAME') or os.getenv('BOT_USER')
     CLIENT_KEY = os.getenv('CLIENT_KEY')
     CLIENT_SECRET = os.getenv('CLIENT_SECRET')
     ACCESS_TOKEN = os.getenv('ACCESS_TOKEN')
@@ -110,9 +144,7 @@ if __name__ == '__main__':
     GROUP_NAME = os.getenv('GROUP_NAME')
     OWNER = os.getenv('OWNER')
     STAFFC = os.getenv('STAFF')
-
-    if STAFFC is not None:
-        STAFF = STAFFC.split(',')
+    STAFF = STAFFC.split(',') if STAFFC else []
 
     # Register us with the server
     Mastodon.create_app(BOT_NAME, api_base_url=SERVER_URL)
@@ -153,11 +185,12 @@ if __name__ == '__main__':
             for notification in notifications:
                 try:
                     if notification['type'] == 'mention':
-                        username = notification['account']['username']
                         message = notification['status']['content']
                         command, parameters = parse_command(message, BOT_NAME)
                         if command != None:
-                            handle_command(mastodon, STAFF, command, parameters, username)
+                            handle_command(mastodon, command, parameters,
+                                           notification['account'],
+                                           notification['status'])
                     else:
                         logging.debug("Ignoring notif type: " + notification['type'])
                 except Exception as e:
