@@ -1,4 +1,5 @@
 import signal
+import socket
 import time
 import logging
 import sys
@@ -24,13 +25,21 @@ import shlex
 import re
 import logging
 
+def safe_log_text(text, limit=200):
+    """Truncate and strip control characters before writing user-supplied text to logs."""
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text or '')
+    if len(text) > limit:
+        text = text[:limit] + '…'
+    return text
+
+
 def parse_command(message, bot_name):
     if not message.strip():
         return None, None  # Handle empty message case
 
     # Remove HTML tags using a regular expression
     message = re.sub(r'<[^>]+>', '', message)  # Strip HTML tags
-    logging.debug("MSG: " + message)
+    logging.debug("MSG: " + safe_log_text(message))
     # Use shlex to handle quoted strings. User-generated Mastodon posts aren't
     # guaranteed to have balanced quotes (e.g. a stray apostrophe like "wasn't"),
     # which makes shlex.split raise ValueError -- treat that as "not a command"
@@ -46,7 +55,7 @@ def parse_command(message, bot_name):
 
     # Check if the first part is the bot's name
     if parts[0].lower() != '@' + bot_name.lower():
-        logging.info(f"Message does not start with my name: {bot_name} / {parts[0]}")
+        logging.info(f"Message does not start with my name: {bot_name} / {safe_log_text(parts[0])}")
         return None, None  # Do nothing if the first var is not the bot's name
 
     # Extract command and parameters
@@ -82,10 +91,76 @@ def role_for(account, owner, staff, server_url):
     return 'PUBLIC'
 
 
+def reply_safely(mastodon, status, text, key):
+    """Reply to `status`, keyed for idempotency. Always passes spoiler_text='' so the
+    reply never inherits the original status's Content Warning (Mastodon.py defaults to
+    inheriting it when spoiler_text is None -- confirmed against its source), and never
+    widens a private/direct message into a public 'unlisted' reply."""
+    visibility = 'direct' if status.get('visibility') == 'direct' else 'unlisted'
+    mastodon.status_reply(
+        status, text,
+        untag=True,
+        visibility=visibility,
+        spoiler_text='',
+        idempotency_key=key,
+    )
+
+
+def sanitize_for_reply(text, limit=80):
+    """Neutralize characters that would let attacker-supplied text be linkified, turned
+    into an @-mention, or used to forge multi-line output when echoed back into a public
+    reply (e.g. a search query). Not for use on trusted/authored content."""
+    text = text.replace('\n', ' ').replace('\r', ' ')
+    text = text.replace('@', '(at)')
+    text = re.sub(r'https?://', '', text, flags=re.IGNORECASE)
+    text = text.strip()
+    if len(text) > limit:
+        text = text[:limit].rstrip() + '…'
+    return text
+
+
+FEED_CACHE_TTL = 300  # seconds
+_feed_cache = {}  # url -> (fetched_at, parsed_feed)
+
+
+def cached_parse(url):
+    """feedparser.parse() with a short TTL cache so repeated lastvideo/lastpod/search
+    commands don't each trigger a fresh multi-MB feed download. The periodic
+    new-item checker is unaffected -- it keeps calling feedparser.parse() directly,
+    since it must see fresh data every DELAY tick regardless."""
+    now = time.time()
+    cached = _feed_cache.get(url)
+    if cached and now - cached[0] < FEED_CACHE_TTL:
+        return cached[1]
+    parsed = feedparser.parse(url)
+    _feed_cache[url] = (now, parsed)
+    return parsed
+
+
+COMMAND_COOLDOWN_SECONDS = 60
+NETWORK_COMMANDS = {"lastvideo", "lastpod", "searchvideo", "searchpod"}
+_last_command_time = {}  # acct -> timestamp
+
+
+def rate_limited(acct):
+    """True if `acct` used a network command within the cooldown window."""
+    now = time.time()
+    if now - _last_command_time.get(acct, 0) < COMMAND_COOLDOWN_SECONDS:
+        return True
+    _last_command_time[acct] = now
+    return False
+
+
 def handle_command(mastodon, command, parameters, account, status):
     """Handle commands received from users."""
     acct = (account.get('acct') or '').lower()
     user_role = role_for(account, OWNER, STAFF, SERVER_URL)
+
+    if command in NETWORK_COMMANDS and user_role == 'LOCAL' and rate_limited(acct):
+        reply_safely(mastodon, status, "You're doing that too fast — try again in a minute.",
+                     f"cooldown-{status['id']}")
+        logging.info(f"Rate-limited {command} from {acct}")
+        return
 
     if command in command_permissions:
         allowed_roles = command_permissions[command]
@@ -93,61 +168,53 @@ def handle_command(mastodon, command, parameters, account, status):
             # Execute the command
             if command == "say":
                 # Post the message with privacy setting of Followers
-                mastodon.status_post(parameters, visibility='public')
+                mastodon.status_post(parameters, visibility='public',
+                                      idempotency_key=f"say-{status['id']}")
                 logging.info(f"Posted message from {acct}: {parameters}")
             elif command == "ping":
-                # Don't downgrade a DM's privacy by answering it unlisted.
-                reply_visibility = ('direct' if status.get('visibility') == 'direct'
-                                    else 'unlisted')
-                mastodon.status_reply(
-                    status,
-                    f"pong - {VERSION}",
-                    untag=True,
-                    visibility=reply_visibility,
-                    idempotency_key=f"pong-{status['id']}",
-                )
+                reply_safely(mastodon, status, f"pong - {VERSION}", f"pong-{status['id']}")
                 logging.info(f"Replied pong ({VERSION}) to {acct}")
             elif command == "lastvideo":
-                x = feedparser.parse(YT_URL)
+                x = cached_parse(YT_URL)
                 entry = x.entries[0]
                 text = build_post(f"Latest {GROUP_NAME} video:",
                                    entry.get('title', ''), entry.link)
-                mastodon.status_reply(status, text, untag=True, visibility='unlisted',
-                                       idempotency_key=f"lastvideo-{status['id']}")
+                reply_safely(mastodon, status, text, f"lastvideo-{status['id']}")
                 logging.info(f"Replied lastvideo to {acct}")
             elif command == "lastpod":
-                x = feedparser.parse(POD_URL)
+                x = cached_parse(POD_URL)
                 entry = x.entries[0]
                 text = build_post(f"Latest {GROUP_NAME} podcast:",
                                    entry.get('title', ''), entry.enclosures[0].href)
-                mastodon.status_reply(status, text, untag=True, visibility='unlisted',
-                                       idempotency_key=f"lastpod-{status['id']}")
+                reply_safely(mastodon, status, text, f"lastpod-{status['id']}")
                 logging.info(f"Replied lastpod to {acct}")
             elif command in ("searchvideo", "searchpod"):
                 if not parameters.strip():
                     text = f"Usage: @{BOT_NAME} {command} <search terms>"
                     result_count = 0
                 else:
+                    safe_query = sanitize_for_reply(parameters)
                     is_video = command == "searchvideo"
-                    x = feedparser.parse(YT_URL if is_video else POD_URL)
+                    x = cached_parse(YT_URL if is_video else POD_URL)
                     matches = search_entries(x.entries, parameters)
                     result_count = len(matches)
                     kind = "video" if is_video else "podcast episode"
-                    header = (f'Found {result_count} {kind}'
-                              f'{"s" if result_count != 1 else ""} matching "{parameters}":')
-                    if is_video:
-                        header += "\n(only the 15 most recent videos are searchable)"
                     if not matches:
-                        text = header.replace("Found 0", "No")
+                        text = f'No {kind}s found matching "{safe_query}":'
+                        if is_video:
+                            text += "\n(only the 15 most recent videos are searchable)"
                     else:
+                        header = (f'Found {result_count} {kind}'
+                                  f'{"s" if result_count != 1 else ""} matching "{safe_query}":')
+                        if is_video:
+                            header += "\n(only the 15 most recent videos are searchable)"
                         results = [
                             (m.get('title', ''), m.link if is_video else m.enclosures[0].href)
                             for m in matches[:5]
                         ]
                         text = build_search_reply(header, results, result_count,
                                                    MAX_CHARS, URL_CHARS)
-                mastodon.status_reply(status, text, untag=True, visibility='unlisted',
-                                       idempotency_key=f"{command}-{status['id']}")
+                reply_safely(mastodon, status, text, f"{command}-{status['id']}")
                 logging.info(f"Replied {command} ({result_count} results) to {acct}")
         else:
             logging.info(f"User {acct} is not allowed to use the command '{command}'.")
@@ -222,7 +289,10 @@ def build_search_reply(header, results, total_matches, max_chars, url_chars):
     return text
 
 if __name__ == '__main__':
-    logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+    logging.basicConfig(stream=sys.stdout, level=os.getenv('LOG_LEVEL', 'INFO'))
+    # Documented workaround for feedparser (which exposes no per-call timeout) --
+    # also protects every Mastodon.py call in this process from hanging forever.
+    socket.setdefaulttimeout(15)
     killer = GracefulKiller()
 
     # Echo version
@@ -232,8 +302,6 @@ if __name__ == '__main__':
     # Env Vars
     SERVER_URL = os.getenv('SERVER_URL')
     BOT_NAME = os.getenv('BOT_NAME') or os.getenv('BOT_USER')
-    CLIENT_KEY = os.getenv('CLIENT_KEY')
-    CLIENT_SECRET = os.getenv('CLIENT_SECRET')
     ACCESS_TOKEN = os.getenv('ACCESS_TOKEN')
     YT_URL = os.getenv('YT_URL')
     POD_URL = os.getenv('POD_URL')
@@ -242,9 +310,6 @@ if __name__ == '__main__':
     OWNER = os.getenv('OWNER')
     STAFFC = os.getenv('STAFF')
     STAFF = STAFFC.split(',') if STAFFC else []
-
-    # Register us with the server
-    Mastodon.create_app(BOT_NAME, api_base_url=SERVER_URL)
 
     # Initialize Client
     mastodon = Mastodon(api_base_url=SERVER_URL, access_token=ACCESS_TOKEN)
@@ -284,13 +349,14 @@ if __name__ == '__main__':
     logging.info("Checking in with owner..")
     #mastodon.status_post("I'm online @" + OWNER, visibility='direct')
     last_execution_time = 0
+    last_notification_id = None
     logging.info("Starting application loop..")
     while True:
         current_time = time.time()
         try:
             # CHECK FOR NOTIFICATIONS ON LOOP
             logging.debug("Checking for new DMs..")
-            notifications = mastodon.notifications()
+            notifications = mastodon.notifications(since_id=last_notification_id)
             for notification in notifications:
                 try:
                     if notification['type'] == 'mention':
@@ -303,11 +369,19 @@ if __name__ == '__main__':
                     else:
                         logging.debug("Ignoring notif type: " + notification['type'])
                 except Exception as e:
-                    # Never let one bad notification block notifications_clear() below --
-                    # that used to strand the whole batch and get it re-processed (and
+                    # Never let one bad notification block the dismiss below -- that
+                    # used to strand the whole batch and get it re-processed (and
                     # re-crashed on) forever, blocking feed posting along with it.
                     logging.info(f"Error handling notification {notification.get('id')}: {e}")
-            mastodon.notifications_clear()
+                finally:
+                    # Dismiss individually and track since_id, rather than the old
+                    # blanket notifications_clear() -- that discarded anything beyond
+                    # the fetched page or arriving mid-processing, letting a flood of
+                    # mentions silently drop other users' (or the owner's) commands.
+                    mastodon.notifications_dismiss(notification['id'])
+                    nid = int(notification['id'])
+                    if last_notification_id is None or nid > int(last_notification_id):
+                        last_notification_id = notification['id']
 
 
             # FETCH FEEDS ON DELAY
@@ -323,9 +397,9 @@ if __name__ == '__main__':
                 z = x.entries[0].link
                 t = x.entries[0].get('title', '')
                 if y != currentYT:
-                    currentYT = y
                     logging.info("Found new video: " + t)
                     mastodon.status_post(build_post(messageYT, t, z))
+                    currentYT = y
 
                 # Check for new podcasts
                 logging.info("Checking for new Podcasts..")
@@ -334,9 +408,9 @@ if __name__ == '__main__':
                 z = x.entries[0].enclosures[0].href
                 t = x.entries[0].get('title', '')
                 if y != currentPD:
-                    currentPD = y
                     logging.info("Found new podcast: " + t)
                     mastodon.status_post(build_post(messagePD, t, z))
+                    currentPD = y
                 last_execution_time = current_time
                 logging.info("Update loop complete.")
             time.sleep(20)
